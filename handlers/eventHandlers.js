@@ -1,12 +1,12 @@
 const { Events } = require('discord.js');
-const LifecycleEvents = require('./events/lifecycleEvents');
-const MessageEvents = require('./events/messageEvents');
-const InteractionEvents = require('./events/interactionEvents');
-const VoiceEvents = require('./events/voiceEvents');
-const ReactionEvents = require('./events/reactionEvents');
-const GuildEvents = require('./events/guildEvents');
-const ErrorEvents = require('./events/errorEvents');
-const MaintenanceService = require('./maintenance/maintenanceService');
+const LifecycleEvents = require('../events/lifecycleEvents');
+const MessageEvents = require('../events/messageEvents');
+const InteractionEvents = require('../events/interactionEvents');
+const VoiceEvents = require('../events/voiceEvents');
+const ReactionEvents = require('../events/reactionEvents');
+const GuildEvents = require('../events/guildEvents');
+const ErrorEvents = require('../events/errorEvents');
+const MaintenanceService = require('../events/maintenance/maintenanceService');
 
 class EventHandlers {
   constructor({ client, config, database, redis, pointsSystem, voiceTracker, commandLoader }) {
