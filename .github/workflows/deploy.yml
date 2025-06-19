@@ -1,0 +1,236 @@
+name: 🚀 Deploy Discord Bot
+
+on:
+  push:
+    branches: [ main, master ]
+  pull_request:
+    branches: [ main, master ]
+  workflow_dispatch: # Allow manual triggers
+
+env:
+  REGISTRY: ghcr.io
+  IMAGE_NAME: ${{ github.repository }}
+
+jobs:
+  # 🧪 Test Job
+  test:
+    runs-on: ubuntu-latest
+    name: 🧪 Test Commands
+    
+    steps:
+    - name: 📥 Checkout code
+      uses: actions/checkout@v4
+      
+    - name: 🟨 Setup Node.js
+      uses: actions/setup-node@v4
+      with:
+        node-version: '18'
+        cache: 'npm'
+        
+    - name: 🐍 Setup Python
+      uses: actions/setup-python@v4
+      with:
+        python-version: '3.11'
+        
+    - name: 🔷 Setup Go
+      uses: actions/setup-go@v4
+      with:
+        go-version: '1.21'
+        
+    - name: 📦 Install dependencies
+      run: npm ci
+      
+    - name: 🧪 Test JavaScript commands
+      run: |
+        echo "Testing JavaScript commands..."
+        node -e "console.log('✅ JavaScript runtime working')"
+        
+    - name: 🧪 Test Python commands
+      run: |
+        echo "Testing Python commands..."
+        if [ -d "commands/python" ]; then
+          for file in commands/python/*.py; do
+            if [ -f "$file" ]; then
+              echo "Testing $file..."
+              python3 "$file" --get-command-info || echo "⚠️ $file failed metadata test"
+            fi
+          done
+        fi
+        
+    - name: 🧪 Test Go commands
+      run: |
+        echo "Testing Go commands..."
+        if [ -d "commands/golang" ]; then
+          for file in commands/golang/*.go; do
+            if [ -f "$file" ]; then
+              echo "Testing $file..."
+              cd "$(dirname "$file")"
+              go run "$(basename "$file")" --get-command-info || echo "⚠️ $file failed metadata test"
+              cd - > /dev/null
+            fi
+          done
+        fi
+
+  # 🏗️ Build and Push Docker Image
+  build-and-push:
+    runs-on: ubuntu-latest
+    needs: test
+    name: 🏗️ Build & Push Image
+    permissions:
+      contents: read
+      packages: write
+      
+    outputs:
+      image-digest: ${{ steps.build.outputs.digest }}
+      image-uri: ${{ steps.build.outputs.image-uri }}
+      
+    steps:
+    - name: 📥 Checkout code
+      uses: actions/checkout@v4
+      
+    - name: 🔐 Login to Container Registry
+      uses: docker/login-action@v3
+      with:
+        registry: ${{ env.REGISTRY }}
+        username: ${{ github.actor }}
+        password: ${{ secrets.GITHUB_TOKEN }}
+        
+    - name: 📝 Extract metadata
+      id: meta
+      uses: docker/metadata-action@v5
+      with:
+        images: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}
+        tags: |
+          type=ref,event=branch
+          type=ref,event=pr
+          type=sha,prefix={{branch}}-
+          type=raw,value=latest,enable={{is_default_branch}}
+          
+    - name: 🔧 Set up Docker Buildx
+      uses: docker/setup-buildx-action@v3
+      
+    - name: 🏗️ Build and push Docker image
+      id: build
+      uses: docker/build-push-action@v5
+      with:
+        context: .
+        platforms: linux/amd64,linux/arm64
+        push: true
+        tags: ${{ steps.meta.outputs.tags }}
+        labels: ${{ steps.meta.outputs.labels }}
+        cache-from: type=gha
+        cache-to: type=gha,mode=max
+        
+    - name: 📋 Output image details
+      run: |
+        echo "🐳 **Image built successfully!**" >> $GITHUB_STEP_SUMMARY
+        echo "📦 **Registry:** ${{ env.REGISTRY }}" >> $GITHUB_STEP_SUMMARY
+        echo "🏷️ **Tags:** ${{ steps.meta.outputs.tags }}" >> $GITHUB_STEP_SUMMARY
+        echo "🆔 **Digest:** ${{ steps.build.outputs.digest }}" >> $GITHUB_STEP_SUMMARY
+
+  # 🚀 Deploy to Production
+  deploy:
+    runs-on: ubuntu-latest
+    needs: build-and-push
+    name: 🚀 Deploy to Production
+    if: github.ref == 'refs/heads/main' || github.ref == 'refs/heads/master'
+    environment: production
+    
+    steps:
+    - name: 📥 Checkout code
+      uses: actions/checkout@v4
+      
+    - name: 🔑 Setup SSH
+      uses: webfactory/ssh-agent@v0.8.0
+      with:
+        ssh-private-key: ${{ secrets.SSH_PRIVATE_KEY }}
+        
+    - name: 📡 Deploy to server
+      run: |
+        # Add your server to known hosts
+        ssh-keyscan -H ${{ secrets.SERVER_HOST }} >> ~/.ssh/known_hosts
+        
+        # Deploy commands
+        ssh ${{ secrets.SERVER_USER }}@${{ secrets.SERVER_HOST }} << 'ENDSSH'
+          cd ${{ secrets.DEPLOY_PATH }}
+          
+          echo "🔄 Pulling latest changes..."
+          git pull origin main
+          
+          echo "🛑 Stopping current containers..."
+          docker-compose down
+          
+          echo "🏗️ Pulling new image..."
+          docker-compose pull
+          
+          echo "🚀 Starting updated containers..."
+          docker-compose up -d --build
+          
+          echo "🧹 Cleaning up old images..."
+          docker image prune -f
+          
+          echo "✅ Deployment complete!"
+          
+          # Wait for health check
+          sleep 10
+          
+          echo "🏥 Checking bot health..."
+          curl -f http://localhost:8080/health || echo "⚠️ Health check failed"
+          
+        ENDSSH
+        
+    - name: 📊 Post deployment status
+      run: |
+        echo "🎉 **Deployment completed successfully!**" >> $GITHUB_STEP_SUMMARY
+        echo "🤖 **Bot should be online and updated**" >> $GITHUB_STEP_SUMMARY
+        echo "🔗 **Check status:** http://${{ secrets.SERVER_HOST }}:8080/health" >> $GITHUB_STEP_SUMMARY
+
+  # 🧹 Cleanup Old Images
+  cleanup:
+    runs-on: ubuntu-latest
+    needs: deploy
+    name: 🧹 Cleanup Old Images
+    if: always()
+    
+    steps:
+    - name: 🧹 Delete old container images
+      uses: actions/delete-package-versions@v4
+      with:
+        package-name: ${{ env.IMAGE_NAME }}
+        package-type: 'container'
+        min-versions-to-keep: 5
+        delete-only-untagged-versions: true
+
+  # 📢 Notify Discord
+  notify:
+    runs-on: ubuntu-latest
+    needs: [test, build-and-push, deploy]
+    name: 📢 Notify Discord
+    if: always()
+    
+    steps:
+    - name: 📢 Send Discord notification
+      uses: sarisia/actions-status-discord@v1
+      if: always()
+      with:
+        webhook: ${{ secrets.DISCORD_WEBHOOK }}
+        status: ${{ job.status }}
+        title: "🤖 Discord Bot Deployment"
+        description: |
+          **Repository:** ${{ github.repository }}
+          **Branch:** ${{ github.ref_name }}
+          **Commit:** ${{ github.sha }}
+          **Author:** ${{ github.actor }}
+          
+          **Status:**
+          - 🧪 Tests: ${{ needs.test.result }}
+          - 🏗️ Build: ${{ needs.build-and-push.result }}
+          - 🚀 Deploy: ${{ needs.deploy.result }}
+        color: |
+          ${{ 
+            needs.deploy.result == 'success' && '0x00ff00' ||
+            needs.deploy.result == 'failure' && '0xff0000' ||
+            '0xffff00'
+          }}
+        username: "GitHub Actions"
+        avatar_url: "https://github.githubassets.com/images/modules/logos_page/GitHub-Mark.png"

@@ -1,0 +1,248 @@
+services:
+  # PostgreSQL Database - PERSISTENT DATA STORAGE
+  postgres:
+    image: postgres:15-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: discord_bot
+      POSTGRES_USER: bot_user
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-strong_password_here}
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+      - ./database/init.sql:/docker-entrypoint-initdb.d/init.sql:ro
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U bot_user -d discord_bot"]
+      interval: 15s
+      timeout: 5s
+      retries: 5
+      start_period: 30s
+    security_opt:
+      - no-new-privileges:true
+    mem_limit: 512m
+    cpus: 1.0
+
+  # Redis for caching and coordination
+  redis:
+    image: redis:7-alpine
+    restart: unless-stopped
+    ports:
+      - "6379:6379"
+    volumes:
+      - redis_data:/data
+    command: >
+      redis-server
+      --appendonly yes
+      --maxmemory 256mb
+      --maxmemory-policy allkeys-lru
+      --timeout 60
+      --tcp-keepalive 60
+      --save 60 1000
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 15s
+      timeout: 5s
+      retries: 3
+      start_period: 10s
+    security_opt:
+      - no-new-privileges:true
+    read_only: true
+    tmpfs:
+      - /tmp:noexec,nosuid,size=50m
+    mem_limit: 512m
+    cpus: 0.5
+
+  # PRIMARY Discord bot - Always running
+  discord-bot-primary:
+    build: 
+      context: .
+    restart: unless-stopped
+    environment:
+      - SECURITY_KEY=${SECURITY_KEY}
+      - POSTGRES_PASSWORD=${POSTGRES_PASSWORD}
+      - DISCORD_TOKEN=${DISCORD_TOKEN}
+      - DISCORD_CLIENT_ID=${DISCORD_CLIENT_ID}
+      - DISCORD_GUILD_ID=${DISCORD_GUILD_ID}
+      - REDIS_URL=redis://redis:6379
+      - POSTGRES_URL=postgresql://bot_user:${POSTGRES_PASSWORD:-strong_password_here}@postgres:5432/discord_bot
+      - NODE_ID=primary-bot
+      - PORT=3000
+      - NODE_ENV=production
+      - BOT_ROLE=primary
+      - SCALING_MODE=enabled
+    ports:
+      - "3001:3000"
+    depends_on:
+      redis:
+        condition: service_healthy
+      postgres:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "node", "healthcheck.js"]
+      interval: 15s
+      timeout: 5s
+      retries: 3
+      start_period: 15s
+    security_opt:
+      - no-new-privileges:true
+    read_only: true
+    tmpfs:
+      - /tmp:noexec,nosuid,size=50m
+      - /usr/src/app/logs:noexec,nosuid,size=100m
+    mem_limit: 512m
+    cpus: 1.0
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "10m"
+        max-file: "3"
+
+  # SECONDARY bot - Only starts under high load
+  discord-bot-secondary:
+    build: 
+      context: .
+    restart: "no"  # Don't auto-restart - let scaling handle it
+    environment:
+      - SECURITY_KEY=${SECURITY_KEY}
+      - POSTGRES_PASSWORD=${POSTGRES_PASSWORD}
+      - DISCORD_TOKEN=${DISCORD_TOKEN}
+      - DISCORD_CLIENT_ID=${DISCORD_CLIENT_ID}
+      - DISCORD_GUILD_ID=${DISCORD_GUILD_ID}
+      - REDIS_URL=redis://redis:6379
+      - POSTGRES_URL=postgresql://bot_user:${POSTGRES_PASSWORD:-strong_password_here}@postgres:5432/discord_bot
+      - NODE_ID=secondary-bot
+      - PORT=3000
+      - NODE_ENV=production
+      - BOT_ROLE=secondary
+      - SCALING_MODE=enabled
+    ports:
+      - "3002:3000"
+    depends_on:
+      redis:
+        condition: service_healthy
+      postgres:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "node", "healthcheck.js"]
+      interval: 15s
+      timeout: 5s
+      retries: 3
+      start_period: 15s
+    security_opt:
+      - no-new-privileges:true
+    read_only: true
+    tmpfs:
+      - /tmp:noexec,nosuid,size=50m
+      - /usr/src/app/logs:noexec,nosuid,size=100m
+    mem_limit: 512m
+    cpus: 1.0
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "10m"
+        max-file: "3"
+    profiles:
+      - scaling  # Only start when scaling profile is active
+
+  # TERTIARY bot - Only for extreme load
+  discord-bot-tertiary:
+    build: 
+      context: .
+    restart: "no"
+    environment:
+      - SECURITY_KEY=${SECURITY_KEY}
+      - POSTGRES_PASSWORD=${POSTGRES_PASSWORD}
+      - DISCORD_TOKEN=${DISCORD_TOKEN}
+      - DISCORD_CLIENT_ID=${DISCORD_CLIENT_ID}
+      - DISCORD_GUILD_ID=${DISCORD_GUILD_ID}
+      - REDIS_URL=redis://redis:6379
+      - POSTGRES_URL=postgresql://bot_user:${POSTGRES_PASSWORD:-strong_password_here}@postgres:5432/discord_bot
+      - NODE_ID=tertiary-bot
+      - PORT=3000
+      - NODE_ENV=production
+      - BOT_ROLE=tertiary
+      - SCALING_MODE=enabled
+    ports:
+      - "3003:3000"
+    depends_on:
+      redis:
+        condition: service_healthy
+      postgres:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "node", "healthcheck.js"]
+      interval: 15s
+      timeout: 5s
+      retries: 3
+      start_period: 15s
+    security_opt:
+      - no-new-privileges:true
+    read_only: true
+    tmpfs:
+      - /tmp:noexec,nosuid,size=50m
+      - /usr/src/app/logs:noexec,nosuid,size=100m
+    mem_limit: 512m
+    cpus: 1.0
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "10m"
+        max-file: "3"
+    profiles:
+      - scaling
+      - extreme  # Only start for extreme load
+
+  # Load Monitor & Auto-Scaler
+  scaler:
+    image: alpine:latest
+    restart: unless-stopped
+    environment:
+      - DOCKER_HOST=unix:///var/run/docker.sock
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock:ro
+      - ./scripts:/scripts:ro
+    command: |
+      sh -c "
+        apk add --no-cache curl docker-cli &&
+        while true; do
+          # Check primary bot load
+          LOAD=$$(curl -s http://discord-bot-primary:3000/health | grep -o '\"guilds\":[0-9]*' | cut -d: -f2 || echo 0)
+          CPU=$$(curl -s http://discord-bot-primary:3000/health | grep -o '\"ping\":[0-9]*' | cut -d: -f2 || echo 0)
+          
+          echo \"Load: $$LOAD guilds, Ping: $$CPU ms\"
+          
+          # Scale up if high load (ping > 300ms or manual trigger)
+          if [ \"$$CPU\" -gt 300 ] || [ -f /tmp/scale-up ]; then
+            echo \"High load detected - scaling up\"
+            docker-compose --profile scaling up -d discord-bot-secondary 2>/dev/null || true
+            rm -f /tmp/scale-up 2>/dev/null || true
+          fi
+          
+          # Scale down if low load (ping < 100ms for 5 minutes)
+          if [ \"$$CPU\" -lt 100 ]; then
+            echo \"Low load - considering scale down\"
+            # Add scale-down logic here
+          fi
+          
+          sleep 30
+        done
+      "
+    depends_on:
+      - discord-bot-primary
+    profiles:
+      - autoscale
+
+volumes:
+  redis_data:
+    driver: local
+  postgres_data:
+    driver: local
+
+# Network security
+networks:
+  default:
+    driver: bridge
+    ipam:
+      config:
+        - subnet: 172.20.0.0/16
