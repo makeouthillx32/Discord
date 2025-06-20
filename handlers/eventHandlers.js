@@ -4,6 +4,7 @@ const MessageEvents = require('../events/messageEvents');
 const InteractionEvents = require('../events/interactionEvents');
 const VoiceEvents = require('../events/voiceEvents');
 const ReactionEvents = require('../events/reactionEvents');
+const ReactionRoleEvents = require('../events/reactionRoleEvents');
 const GuildEvents = require('../events/guildEvents');
 const ErrorEvents = require('../events/errorEvents');
 const MaintenanceService = require('../events/maintenance/maintenanceService');
@@ -24,6 +25,7 @@ class EventHandlers {
     this.interactionEvents = new InteractionEvents(this);
     this.voiceEvents = new VoiceEvents(this);
     this.reactionEvents = new ReactionEvents(this);
+    this.reactionRoleEvents = new ReactionRoleEvents(this);
     this.guildEvents = new GuildEvents(this);
     this.errorEvents = new ErrorEvents(this);
     this.maintenanceService = new MaintenanceService(this);
@@ -38,6 +40,7 @@ class EventHandlers {
     this.interactionEvents.setup();
     this.voiceEvents.setup();
     this.reactionEvents.setup();
+    this.reactionRoleEvents.setup();
     this.guildEvents.setup();
     this.errorEvents.setup();
     

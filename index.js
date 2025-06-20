@@ -74,10 +74,11 @@ const VoiceTracker = require('./services/voiceTracker');
 const CommandLoader = require('./services/commandLoader');
 const EventHandlers = require('./handlers/eventHandlers'); // This exists!
 
-// Create Discord client
+// Create Discord client with FIXED INTENTS
 const client = new Client({
   intents: [
     GatewayIntentBits.Guilds,
+    GatewayIntentBits.GuildMembers,           // ← ADDED THIS - Required for guild cache
     GatewayIntentBits.GuildMessages,
     GatewayIntentBits.MessageContent,
     GatewayIntentBits.DirectMessages,
@@ -273,7 +274,20 @@ function setupBasicEvents() {
   
   client.once(Events.ClientReady, (readyClient) => {
     console.log(`✅ Bot ready! Logged in as ${readyClient.user.tag}`);
-    console.log(`🏠 Serving ${readyClient.guilds.cache.size} guilds`);
+    
+    // Wait for guild cache to populate before showing count
+    setTimeout(() => {
+      const guildCount = readyClient.guilds.cache.size;
+      console.log(`🏠 Serving ${guildCount} guilds`);
+      
+      if (guildCount > 0) {
+        readyClient.guilds.cache.forEach(guild => {
+          console.log(`  📍 Guild: ${guild.name} (${guild.id})`);
+        });
+      } else {
+        console.log(`⚠️  No guilds found. Check bot permissions and Server Members Intent.`);
+      }
+    }, 2000);
   });
 
   client.on(Events.InteractionCreate, async (interaction) => {

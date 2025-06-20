@@ -1,10 +1,11 @@
-// handlers/events/voiceEvents.js
 const { Events } = require('discord.js');
 
 class VoiceEvents {
   constructor(eventHandler) {
     this.client = eventHandler.client;
     this.voiceTracker = eventHandler.voiceTracker;
+    this.config = eventHandler.config;
+    this.eventHandler = eventHandler;
   }
 
   setup() {
@@ -14,11 +15,40 @@ class VoiceEvents {
       const member = newState.member;
       
       try {
+        // User joined a voice channel
         if (!oldState.channelId && newState.channelId) {
-          await this.voiceTracker.handleVoiceJoin(userId, guildId, newState.channelId, member);
-        } else if (oldState.channelId && !newState.channelId) {
-          await this.voiceTracker.handleVoiceLeave(userId, guildId, true);
+          console.log(`🎤 ${member.displayName} joined voice channel ${newState.channel.name}`);
+          if (this.voiceTracker) {
+            await this.voiceTracker.handleVoiceJoin(userId, guildId, newState.channelId, member);
+          }
+        } 
+        // User left a voice channel
+        else if (oldState.channelId && !newState.channelId) {
+          console.log(`🎤 ${member.displayName} left voice channel ${oldState.channel.name}`);
+          if (this.voiceTracker) {
+            await this.voiceTracker.handleVoiceLeave(userId, guildId, true);
+          }
         }
+        // User switched voice channels
+        else if (oldState.channelId && newState.channelId && oldState.channelId !== newState.channelId) {
+          console.log(`🎤 ${member.displayName} switched from ${oldState.channel.name} to ${newState.channel.name}`);
+          if (this.voiceTracker) {
+            await this.voiceTracker.handleVoiceChannelSwitch(userId, guildId, oldState.channelId, newState.channelId);
+          }
+        }
+        
+        // Handle mute/deafen changes
+        if (oldState.selfMute !== newState.selfMute || oldState.selfDeaf !== newState.selfDeaf) {
+          if (this.voiceTracker) {
+            await this.voiceTracker.handleVoiceEvent('user_muted', {
+              userId,
+              guildId,
+              isMuted: newState.selfMute,
+              isDeafened: newState.selfDeaf
+            });
+          }
+        }
+        
       } catch (error) {
         console.error('Error handling voice state update:', error);
       }
@@ -26,103 +56,4 @@ class VoiceEvents {
   }
 }
 
-// handlers/events/reactionEvents.js
-const { Events } = require('discord.js');
-
-class ReactionEvents {
-  constructor(eventHandler) {
-    this.client = eventHandler.client;
-    this.config = eventHandler.config;
-    this.eventHandler = eventHandler;
-  }
-
-  setup() {
-    this.client.on(Events.MessageReactionAdd, async (reaction, user) => {
-      if (user.bot || !reaction.message.guild) return;
-      
-      try {
-        await this.eventHandler.safeAwardPoints(
-          user.id,
-          reaction.message.guild.id,
-          this.config.points.REACTION_GIVEN,
-          'Reaction Given',
-          'reaction_given',
-          { emoji: reaction.emoji.name }
-        );
-      } catch (error) {
-        console.error('Error handling reaction add:', error);
-      }
-    });
-  }
-}
-
-// handlers/events/guildEvents.js
-const { Events } = require('discord.js');
-
-class GuildEvents {
-  constructor(eventHandler) {
-    this.client = eventHandler.client;
-    this.database = eventHandler.database;
-    this.redis = eventHandler.redis;
-    this.config = eventHandler.config;
-  }
-
-  setup() {
-    this.client.on(Events.GuildCreate, async (guild) => {
-      console.log(`🎉 Joined new guild: ${guild.name} (${guild.id})`);
-      
-      try {
-        await this.database.upsertGuild(guild.id, {
-          name: guild.name,
-          iconURL: guild.iconURL({ dynamic: true })
-        });
-        
-        await this.redis.updateNodeHeartbeat(this.config.nodeId, {
-          status: 'active',
-          guilds: this.client.guilds.cache.size
-        });
-      } catch (error) {
-        console.error('Error handling guild create:', error);
-      }
-    });
-
-    this.client.on(Events.GuildDelete, async (guild) => {
-      console.log(`👋 Left guild: ${guild.name} (${guild.id})`);
-      
-      try {
-        await this.redis.updateNodeHeartbeat(this.config.nodeId, {
-          status: 'active',
-          guilds: this.client.guilds.cache.size
-        });
-      } catch (error) {
-        console.error('Error handling guild delete:', error);
-      }
-    });
-  }
-}
-
-// handlers/events/errorEvents.js
-const { Events } = require('discord.js');
-
-class ErrorEvents {
-  constructor(eventHandler) {
-    this.client = eventHandler.client;
-    this.config = eventHandler.config;
-  }
-
-  setup() {
-    this.client.on(Events.Error, (error) => {
-      console.error('💥 Discord client error:', error);
-    });
-
-    this.client.on(Events.Warn, (warning) => {
-      console.warn('⚠️ Discord client warning:', warning);
-    });
-
-    this.client.on(Events.RateLimited, (rateLimitData) => {
-      console.warn('🚦 Rate limited:', rateLimitData);
-    });
-  }
-}
-
-module.exports = { VoiceEvents, ReactionEvents, GuildEvents, ErrorEvents };
+module.exports = VoiceEvents;
